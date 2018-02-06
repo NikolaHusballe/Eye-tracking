@@ -1,0 +1,157 @@
+---
+title: "data cleaning"
+output: pdf_document
+---
+
+merging the files
+```{r}
+install.packages("dplyr")
+library(dplyr)
+install.packages("data.table")
+library(data.table)
+
+fixations = fread("FixationsV1.csv")
+saccades = fread("SaccadesV1.csv")
+samples = fread("SamplesV1.csv")
+log1 = fread("logfile_1_2_f.csv")
+log2 = fread("logfile_2_1_f.csv")
+log3 = fread("logfile_3_2_f.csv")
+log4 = fread("logfile_4_1_F.csv")
+log5 = fread("logfile_5_2_m.csv")
+log6 = fread("logfile_6_1_m.csv")
+
+logfiles = rbind(log1, log2, log3, log4, log5, log6)
+
+logfiles$V1 = as.factor(logfiles$V1)
+logfiles$V1 = as.numeric(logfiles$V1)
+
+logfiles= rename(logfiles, "Trial" = "V1")
+
+logfiles=rename(logfiles, "ParticipantID" = "subject")
+
+#substr gender, ostensiveness, direction
+
+logfiles$actorGender = substr(logfiles$video, start = 1, stop = 1)
+logfiles$ostensiveness = substr(logfiles$video, start = 13, stop = 14)
+logfiles$direction = substr(logfiles$video, start = 9, stop =  11)
+
+
+## merging logfiles with V1's
+
+fixationsM = merge(fixations, logfiles, by = c("ParticipantID", "Trial"), all = T)
+saccadesM = merge(saccades, logfiles, by = c("ParticipantID", "Trial"), all = T)
+samplesM = merge(samples, logfiles, by = c("ParticipantID", "Trial"), all = T)
+
+# adding condition
+fixationsM$condition = NA
+samplesM$condition = NA
+saccadesM$condition = NA
+
+samplesM$condition[which(samplesM$SearchOrder == "1" & samplesM$Trial <6)]= "Star"
+samplesM$condition[which(samplesM$SearchOrder == "2" & samplesM$Trial >5)]= "Count"
+samplesM$condition[which(samplesM$SearchOrder == "2" & samplesM$Trial <6)]= "Star"
+samplesM$condition[which(samplesM$SearchOrder == "1" & samplesM$Trial >5)]= "Count"
+
+fixationsM$condition[which(fixationsM$SearchOrder == "1" & fixationsM$Trial <6)]= "Star"
+fixationsM$condition[which(fixationsM$SearchOrder == "2" & fixationsM$Trial >5)]= "Count"
+fixationsM$condition[which(fixationsM$SearchOrder == "2" & fixationsM$Trial <6)]= "Star"
+fixationsM$condition[which(fixationsM$SearchOrder == "1" & fixationsM$Trial >5)]= "Count"
+
+saccadesM$condition[which(saccadesM$SearchOrder == "1" & saccadesM$Trial <6)]= "Star"
+saccadesM$condition[which(saccadesM$SearchOrder == "2" & saccadesM$Trial >5)]= "Count"
+saccadesM$condition[which(saccadesM$SearchOrder == "2" & saccadesM$Trial <6)]= "Star"
+saccadesM$condition[which(saccadesM$SearchOrder == "1" & saccadesM$Trial >5)]= "Count"
+
+
+```
+
+modelling the data:
+Searchtype is controlling for the different order the pictures/conditions are shown
+Systemtic change over time per trial is controlled for by adding trial as a 
+Adding fixations controls for the temporal effects in eack trial - each fixation is a datapoint, i.e. durations of these may differ systematically over time.
+
+log transformation:
+family=gaussian(link=log)
+
+
+```{r}
+# model w. everything predicting fixation duration
+# F_duration ~ SearchType * SearchOrder * fixations * Trial + (1+ST*fix*Trial| ParticipantID)
+
+#simpel model
+#F_duration ~ searchType * Trial + (1+ST*Trial|PID)
+
+library(Metrics)
+library(caret)
+library(lme4)
+library(lmerTest)
+library(modelr)
+
+# subsetting
+data = subset(fixationsM, Task == "VisualSearch")
+
+data$ParticipantID = as.character(data$ParticipantID)
+data$ParticipantID = as.factor(data$ParticipantID)
+data$ParticipantID = as.numeric(data$ParticipantID)
+
+data$folds_id = as.numeric(data$ParticipantID)
+
+flds <- createFolds(unique(data$ParticipantID), k = 3)
+
+test_rmse = NULL
+train_rmse = NULL
+n =  1
+
+for(i in flds){
+  
+  #test
+  testsub = subset(data, folds_id %in% i)
+  #train
+  trainsub = subset(data,!(folds_id %in% i))
+  #train model
+  trainm = lmer(Duration ~ 1 + condition + (1+condition + Trial|ParticipantID), data = trainsub, REML = F)
+  
+  # predicting values for the dependent variable from the testdata using the training model 
+  pred = predict(trainm, testsub, allow.new.levels = T)
+  
+  # calculating the rmse between the actual values in CHI_MLU and the predicted values for both the test and the training subset  
+  train_rmse[n]= Metrics::rmse(trainsub$Duration, fitted(trainm)) 
+  test_rmse[n]=Metrics::rmse(testsub$Duration, pred)
+  
+  
+    
+  n=n+1
+}
+
+mean(test_rmse)
+mean(train_rmse)
+```
+
+#predicting pupil size:
+ pupilSize ~ ost + dir
+ 
+fixation dataset - pupil size is averaged over the individual fixations
+samples dataset - contains information about pupil size for each ms, i.e. a lot of data!(a solution could be downsampling the data - a pragmatical good idea, but as the pupil size changes on a scale of ms. the information would be more complete if avoided)
+
+## Using the sample data:
+
+  PupilSize ~ 1 + ostensiveness * direction + actorGender * ParticipantGender + Trial + TimeTrial + (1+ Trial + TimeTrial + Ost + direction |ParticipantID)
+  
+  because of the luminance of the video the pupil size will be affected at the beginning and the end of each trial, which can be tested for using the TimeTrial
+  direction and ostensiveness may affect each other - 
+  
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
